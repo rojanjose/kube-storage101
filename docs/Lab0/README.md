@@ -1,10 +1,13 @@
 # Lab 0: Pre-work
 
-## 1. Setup Kubernetes environment
+## 1. Setup IBM Cloud and Kubernetes environment
 
-Run through the instructions listed [here](https://github.com/IBM/kube101/tree/master/workshop/Lab0)
+* Using grant cluster app [here](https://ibm.github.io/workshop-setup/GRANTCLUSTER/)
 
-## 2. Cloud shell login
+## 2. CLI environment
+
+* Using IBM Cloud shell [here](https://ibm.github.io/workshop-setup/CLOUDSHELL/)
+* Using Cognitive Class [here](https://ibm.github.io/workshop-setup/COGNITIVECLASS/)
 
 ## 3. Docker hub account
 

@@ -21,7 +21,7 @@ From the cloud shell prompt, run the following commands to get the guestbook app
 ```bash
 cd $HOME
 git clone --branch fs https://github.com/IBM/guestbook-nodejs.git
-git clone --branch storage https://github.com/rojanjose/guestbook-config.git
+git clone --branch storage https://github.com/IBM/guestbook-config.git
 cd $HOME/guestbook-config/storage/lab1
 ```
 
