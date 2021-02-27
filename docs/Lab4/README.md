@@ -6,11 +6,43 @@ When looking at what kind of storage class you would like to use in Kubernetes, 
 
 [Block storage](https://www.ibm.com/cloud/learn/block-storage) is a storage option that breaks data into "blocks" and stores those blocks across a Storage Area Network (SAN). These smaller blocks are faster to store and retrieve than large data objects. For this reason, block storage is primarily used as a backing storage for databases.
 
+
+## Mongodb install as ReplicaSet configuration
+
+In Lab 3, we installed Mongodb
+```
+                ┌────────────────┐
+                │   MongoDB&reg; │
+                |      svc       │
+                └───────┬────────┘
+                        │
+                        ▼
+                  ┌────────────┐
+                  │MongoDB&reg;│
+                  │   Server   │
+                  │    Pod     │
+                  └────────────┘
+```
+
+ReplicaSet without the [MongoDB® Arbiter](https://docs.mongodb.com/manual/core/replica-set-arbiter/) component
+```
+    ┌────────────────┐ ┌────────────────┐ ┌────────────────┐
+    │ MongoDB&reg; 0 │ │ MongoDB&reg; 1 │ │ MongoDB&reg; N │
+    |  external svc  │ |  external svc  │ |  external svc  │
+    └───────┬────────┘ └───────┬────────┘ └───────┬────────┘
+            │                  │                  │
+            ▼                  ▼                  ▼
+    ┌────────────────┐ ┌────────────────┐ ┌────────────────┐
+    │ MongoDB&reg; 0 │ │ MongoDB&reg; 1 │ │ MongoDB&reg; N │
+    │    Server      │ │     Server     │ │     Server     │
+    │     Pod        │ │      Pod       │ │      Pod       │
+    └────────────────┘ └────────────────┘ └────────────────┘
+         primary           secondary         secondary
+```
+
 In this lab we will deploy a Mongo database on top of block storage on Kubernetes.
 
-![archDiagram](./images/archDiagram.png)
-
-The basic architecture is as follows
+The workflow this lab is as follows:
 
 1. When we install MongoDB with the helm chart, a `Persistent Volume Claim` (PVC) is created on the cluster. This PVC is a request for storage to be used by the application.
 
@@ -27,11 +59,9 @@ The basic architecture is as follows
 Before we get into the lab we first need to do some setup to ensure that the lab will flow smoothly.
 
 1. In your terminal, navigate to where you would like to store the files used in this lab and run the following.
-
-```bash
-WORK_DIR=`pwd`
-```
-
+    ```bash
+    WORK_DIR=`pwd`
+    ```
 1. Ensure that you have run through the prerequistes in [Lab0](../Lab0/README.md)
 
 ## Using IBM Cloud Block Storage with Kubernetes
@@ -72,61 +102,72 @@ ibmc-block-retain-custom   ibm.io/ibmc-block   Retain          Immediate        
 Setup the repo that holds the MongoDB chart by following the steps descibed [here](../Lab3/#install-block-storage-plugin).
 
 
-## Mongodb install as ReplicaSet configuration
-
 ### Installation Dry Run
 
-Before we install MongoDB, let's do a test of the installation to see what the chart will create. Since we are using Helm to install MongoDB, we can make use of the `--dry-run` flag in our `helm install` command to show us the manifest files that Helm will apply on the cluster.
+Like the previous lab,let's do a dry run of the installation using the `--dry-run` flag to see what the chart will create. Certain input parameter changes are required for the chat to order to install MongoDB as stateful sets.
 
 Dryrun:
 
 ```bash
-helm install mongo bitnami/mongodb --set global.storageClass=ibmc-block-gold,auth.password=testing,auth.username=guestbookAdmin,auth.database=guestbook -n mongo --dry-run > mongdb-install-dryrun.yaml
+helm install mongo bitnami/mongodb --set architecture=replicaset,arbiter.enabled=false,replicaCount=3,global.storageClass=ibmc-block-gold,auth.password=testing,auth.username=guestbookAdmin,auth.database=guestbook -n mongo-statefulset --dry-run > mongdb-statefuleset-install-dryrun.yaml
 ```
+The addictional parameters used in this install command:
 
->There is a detailed breakdown of this command in the next section titled `Installing MongoDB` if you would like to understand what this helm command is doing.
+- architecture=replicaset, `replicaset` value will force the installation in master/slave configuration using the Kubernetes StatefulSet manifests. Default value for `architecture` is `standalone` and was used in the previous lab.
+- arbiter.enabled=false, disables the installation of arbiter component.
+- replicaCount=3, specifies the number of slave nodes for the MongoDB database.
 
-This command will test out our helm install command and save the output manifests in a file called `mongodb-install-dryrun.yaml`. You can then examine this manifest file so that you know exactly what will be installed on your cluster.
-
-Check out the file in your code editor and take a look at the `PersistentVolumeClaim` object. There should be a property named `storageClassName` in the spec and the value should be `ibmc-block-gold` to signify that we will be using block storage for our database.
-
-Below is what that `PersistentVolumeClaim` object should look like.
+Review the manifests generated in the file `mongdb-statefuleset-install-dryrun.yaml`. 
+Check out the file in your code editor and take a look at the `StatefulSet` object. Scroll down futher, the property named `storageClassName` with a value of `ibmc-block-gold` is defined under the section `volumeClaimTemplates`.
 
 ```yaml
-kind: PersistentVolumeClaim
-apiVersion: v1
+# Source: mongodb/templates/replicaset/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
 metadata:
   name: mongo-mongodb
-  namespace: mongo
+  namespace: mongo-statefulset
   labels:
     app.kubernetes.io/name: mongodb
-    helm.sh/chart: mongodb-10.0.4
+    helm.sh/chart: mongodb-10.7.1
     app.kubernetes.io/instance: mongo
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: mongodb
 spec:
-  accessModes:
-    - "ReadWriteOnce"
-  resources:
-    requests:
-      storage: "8Gi"
-  storageClassName: ibmc-block-gold
+  serviceName: mongo-mongodb-headless
+  podManagementPolicy: OrderedReady
+  replicas: 3
+.....
+.....
+.....
+  volumeClaimTemplates:
+    - metadata:
+        name: datadir
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "8Gi"
+        storageClassName: ibmc-block-gold
+......
+......
 ```
 
 ### Install Mongodb
 
 Before we install MongoDB we need to generate a password for our database credentials. These credentials will be used in the application to authenticate with the database.
 
-For this lab, will be using the [openssl](https://www.openssl.org/) tool to generate the password as this is a common open source cryptographic library. The rest of the command will strip out any characters that could cause issues with the password.
+Generate the password for the user we will use for the `guestbook` database.
 
 ```bash
 USER_PASS=`openssl rand -base64 12 | tr -d "=+/"`
 ```
 
-Now we can install MongoDB and supply the password that we just generated.
+Now we can install MongoDB using the command we tried for the dry run and supply the password that we just generated.
 
-``` bash
-helm install mongo bitnami/mongodb --set global.storageClass=ibmc-block-gold,auth.password=$USER_PASS,auth.username=guestbook-admin,auth.database=guestbook -n mongo
+```bash
+helm install mongo bitnami/mongodb --set architecture=replicaset,arbiter.enabled=false,replicaCount=3,global.storageClass=ibmc-block-gold,auth.password=$USER_PASS,auth.username=guestbookAdmin,auth.database=guestbook -n mongo-statefulset 
 ```
 
 Here's an explanation of the above command:
@@ -136,232 +177,148 @@ Here's an explanation of the above command:
 - ...`auth.password=$USER_PASS`: Create a custom user with this password (Which we generated earlier).
 - ...`auth.username=guestbook-admin`: Create a custom user with this username.
 - ...`auth.database=guestbook`: Create a database named `guestbook` that the custom user can authenticate to.
-- `-n mongo`: Install this release in the `mongo` namespace.
+- `-n mongo-statefulset`: Install this release in the `mongo-statefulset` namespace.
 
 Expected output:
 
-```bash
+```
+$ helm install mongo bitnami/mongodb --set architecture=replicaset,arbiter.enabled=false,replicaCount=3,global.storageClass=ibmc-block-gold,auth.password=$USER_PASS,auth.username=guestbookAdmin,auth.database=guestbook -n mongo-statefulset
+
 NAME: mongo
-LAST DEPLOYED: Tue Nov 24 10:41:15 2020
-NAMESPACE: mongo
+LAST DEPLOYED: Fri Feb 26 18:06:46 2021
+NAMESPACE: mongo-statefulset
 STATUS: deployed
 REVISION: 1
 TEST SUITE: None
 NOTES:
-...
+** Please be patient while the chart is being deployed **
+
+MongoDB(R) can be accessed on the following DNS name(s) and ports from within your cluster:
+
+    mongo-mongodb-0.mongo-mongodb-headless.mongo-statefulset.svc.cluster.local:27017
+    mongo-mongodb-1.mongo-mongodb-headless.mongo-statefulset.svc.cluster.local:27017
+    mongo-mongodb-2.mongo-mongodb-headless.mongo-statefulset.svc.cluster.local:27017
+
+To get the root password run:
+
+    export MONGODB_ROOT_PASSWORD=$(kubectl get secret --namespace mongo-statefulset mongo-mongodb -o jsonpath="{.data.mongodb-root-password}" | base64 --decode)
+
+To get the password for "guestbookAdmin" run:
+
+    export MONGODB_PASSWORD=$(kubectl get secret --namespace mongo-statefulset mongo-mongodb -o jsonpath="{.data.mongodb-password}" | base64 --decode)
+
+To connect to your database, create a MongoDB(R) client container:
+
+    kubectl run --namespace mongo-statefulset mongo-mongodb-client --rm --tty -i --restart='Never' --env="MONGODB_ROOT_PASSWORD=$MONGODB_ROOT_PASSWORD" --image docker.io/bitnami/mongodb:4.4.4-debian-10-r0 --command -- bash
+
+Then, run the following command:
+    mongo admin --host "mongo-mongodb-0.mongo-mongodb-headless.mongo-statefulset.svc.cluster.local:27017,mongo-mongodb-1.mongo-mongodb-headless.mongo-statefulset.svc.cluster.local:27017,mongo-mongodb-2.mongo-mongodb-headless.mongo-statefulset.svc.cluster.local:27017" --authenticationDatabase admin -u root -p $MONGODB_ROOT_PASSWORD
 ```
 
-View the objects being created by the helm chart.
+Copy and save the commands displayed under the `NOTES` section. We will use these commands later in the lab to access the data directly from the database.
+
+
+Wait for the some time and then view the objects created by the helm chart.
 
 ```bash
-kubectl get all -n mongo
+kubectl get all -n mongo-statefulset
 ```
 
-```bash
-NAME                    TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)     AGE
-service/mongo-mongodb   ClusterIP   172.21.242.70   <none>        27017/TCP   17s
+```
+$ kubectl get all -n mongo-statefulset
 
-NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
-deployment.apps/mongo-mongodb   0/1     0            0           17s
+NAME                  READY   STATUS    RESTARTS   AGE
+pod/mongo-mongodb-0   1/1     Running   0          6m8s
+pod/mongo-mongodb-1   1/1     Running   0          4m14s
+pod/mongo-mongodb-2   1/1     Running   0          2m26s
 
-NAME                                       DESIRED   CURRENT   READY   AGE
-replicaset.apps/mongo-mongodb-6f8f7cd789   1         0         0       17s
+NAME                             TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)     AGE
+service/mongo-mongodb-headless   ClusterIP   None         <none>        27017/TCP   6m9s
+
+NAME                             READY   AGE
+statefulset.apps/mongo-mongodb   3/3     6m9s
 ```
 
-View the list of persistence volume claims. Note that the `mongo-mongodb` is pending volume allocation.
+Unlike in the prvious lab where MongoDB installed in standalone more, the pod had the name with the `mongo-mongodb-<random-string>` format. The pods in stateful set have sticky identities with the format `mongo-mongodb-n` where n = 0 for the master and 1,2,3.. for slave nodes.
+
+Check the storage allocation for the database. PVs are allocated for each replica sets and `mongo-mongodb` is now bound to volumes.
 
 ```bash
-kubectl get pvc -n mongo
+kubectl get pvc -n mongo-statefulset
 ```
-
-```bash
-NAME            STATUS    VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS      AGE
-mongo-mongodb   Pending                                      ibmc-block-gold   21s
 ```
-
-After waiting for some time. The pod supporting Mongodb should have a  `Running` status.
-
-```bash
-$ kubectl get all -n mongo
-NAME                                 READY   STATUS    RESTARTS   AGE
-pod/mongo-mongodb-66d7bcd7cf-vqvbj   1/1     Running   0          8m37s
-
-NAME                    TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)     AGE
-service/mongo-mongodb   ClusterIP   172.21.242.70   <none>        27017/TCP   12m
-
-NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
-deployment.apps/mongo-mongodb   1/1     1            1           12m
-
-NAME                                       DESIRED   CURRENT   READY   AGE
-replicaset.apps/mongo-mongodb-66d7bcd7cf   1         1         1       8m37s
-replicaset.apps/mongo-mongodb-6f8f7cd789   0         0         0       12m
-```
-
-And the PVC `mongo-mongodb` is now bound to volume `pvc-2f423668-4f87-4ae4-8edf-8c892188b645`
-
-```bash
-$ kubectl get pvc -n mongo
-NAME            STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS      AGE
-mongo-mongodb   Bound    pvc-2f423668-4f87-4ae4-8edf-8c892188b645   20Gi       RWO            ibmc-block-gold   2m26s
+$ kubectl get pvc -n mongo-statefulset
+NAME                      STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS      AGE
+datadir-mongo-mongodb-0   Bound    pvc-2339ad4f-c6ba-4280-8888-d13058da7d0a   20Gi       RWO            ibmc-block-gold   14m
+datadir-mongo-mongodb-1   Bound    pvc-d5b9630c-ef27-438e-986e-301e26d11329   20Gi       RWO            ibmc-block-gold   12m
+datadir-mongo-mongodb-2   Bound    pvc-038fea42-d456-416d-b5b4-db038c6f0a8d   20Gi       RWO            ibmc-block-gold   10m
 ```
 
 With MongoDB deployed now we need to deploy an application that will utilize it as a datastore.
 
 ### Building Guestbook
 
-For this lab we will be using the guestbook application which is a common sample kubernetes application. However, the version that we are using has been refactored as a loopback application.
-
-1. Clone the application repo and the configuration repo. In your terminal, run the following:
-
-```bash
-cd $WORK_DIR
-git clone https://github.com/IBM/guestbook-nodejs.git
-git clone https://github.com/IBM/guestbook-nodejs-config/ --branch mongo
-```
-
-1. Then, navigate into the `guestbook-nodejs` directory.
-
-```bash
-cd $WORK_DIR/guestbook-nodejs/src
-```
-
-1. Replace the code in the `server/datasources.json` file with the following:
-
-```json
-{
-  "in-memory": {
-    "name": "in-memory",
-    "localStorage": "",
-    "file": "",
-    "connector": "memory"
-  },
-  "mongo": {
-    "host": "${MONGO_HOST}",
-    "port": "${MONGO_PORT}",
-    "url": "",
-    "database": "${MONGO_DB}",
-    "password": "${MONGO_PASS}",
-    "name": "mongo",
-    "user": "${MONGO_USER}",
-    "useNewUrlParser": true,
-    "connector": "mongodb"
-  }
-}
-```
-
-This file will contain the connection information to our MongoDB instance. These variables will be passed into the environment from ConfigMaps and Secrets that we will create.
-
-1. Open the `server/model-config.json` file and change the `entry.datasource` value to `mongo` as seen below:
-
-```json
-...
-"entry": {
-    "dataSource": "mongo",
-    "public": true
-  }
-}
-```
-
-In this file we are telling the application which datasource we should use; in-memory or MongoDB. By default the application comes with an in-memory datastore for storing information but this data does not persist after the application crashes or if the pod goes down for any reason. We are changing `in-memory` to `mongo` so that the data will persist in our MongoDB instance external to the application so that the data will remain even after the application crashes.
-
-1. Now we need to build our application image and push it to DockerHub.
-
-```bash
-cd $WORK_DIR/guestbook-nodejs/src
-IMAGE_NAME=$DOCKERUSER/guestbook-nodejs:mongo
-docker build -t $IMAGE_NAME .
-docker login -u $DOCKERUSER
-docker push $IMAGE_NAME
-```
+Build the Guestbook application as described in lab 3 [here](../Lab3/#building-guestbook).
 
 ### Deploying Guestbook
 
-Now that we have built our application, let's check out the manifest files needed to deploy it to Kubernetes.
+Now that we have built our application, let's deploy the application the same way it was done in Lab 3.
 
 1. Navigate to the configuration repo that we cloned earlier.
+    ```bash
+    cd $WORK_DIR/guestbook-nodejs-config
+    ```
+    
+    This repo contains 3 manifests that we will be deploying to our cluster today:
 
-```bash
-cd $WORK_DIR/guestbook-nodejs-config
-```
+        - A deployment manifest
+        - A service manifest
+        - A configMap manifest
 
-This repo contains 3 manifests that we will be deploying to our cluster today:
 
-- A deployment manifest
-- A service manifest
-- A configMap manifest
+1. Ensure the image name is set corerctly in the deployment yaml `guestbook-deployment.yaml` as described in Lab 3
 
-These manifests will create their respective kubernetes objects on our cluster.
+    For example, my Docker username is `odrodrig` so line 25 in my `guestbook-deployment.yaml` file would look like this:
 
-The `deployment` will deploy our application image that we built earlier while the `service` will expose that application to external traffic. The `configMap` will contain connection information for our database such as database hostname and port.
+    ```yaml
+    ...
+    image: odrodrig/guestbook-nodejs:mongo
+    ...
+    ```
 
-1. Open the `guestbook-deployment.yaml` file and edit line 25 to point to the image that you built and pushed earlier. Do this by replacing `<DockerUsername>` with your docker username. (Don't forget to replace the `< >` too!)
+    Create the kubernetes secret for database user name (`MONGO_USER`) and password (`MONGO_PASS`) 
 
-For example, my Docker username is `odrodrig` so line 25 in my `guestbook-deployment.yaml` file would look like this:
-
-```yaml
-...
-  image: odrodrig/guestbook-nodejs:mongo
-...
-```
-
-As part of the deployment, kubernetes will copy the database connection information from the configMap into the environment of the application. You can see where this is specified in the `env` section of the deployment manifest as seen below:
-
-```yaml
-...
-env:
-  - name: MONGO_HOST
-    valueFrom:
-      configMapKeyRef:
-        name: mongo-config
-        key: mongo_host
-  - name: MONGO_PORT
-    valueFrom:
-      configMapKeyRef:
-        name: mongo-config
-        key: mongo_port
-  - name: MONGO_USER
-    valueFrom:
-      secretKeyRef:
-        name: mongodb
-        key: username
-  - name: MONGO_PASS
-    valueFrom:
-      secretKeyRef:
-        name: mongodb
-        key: password
-  - name: MONGO_DB
-    valueFrom:
-      configMapKeyRef:
-        name: mongo-config
-        key: mongo_db_name
-```
-
-You might also notice that we are getting our database username (`MONGO_USER`) and password (`MONGO_PASS`) from a kubernetes secret. We haven't defined that secret yet so let's do it now.
-
-```bash
-kubectl create secret generic mongodb --from-literal=username=guestbook-admin --from-literal=password=$USER_PASS -n mongo
-```
+    ```bash
+    kubectl create secret generic mongodb --from-literal=username=guestbook-admin --from-literal=password=$USER_PASS -n mongo-statefulset
+    ```
+    ```
+    $ kubectl create secret generic mongodb --from-literal=username=guestbook-admin --from-literal=password=$USER_PASS -n mongo-statefulset
+    secret/mongodb created
+    ```
 
 1. Now we are ready to deploy the application. Run the following commands:
 
-```bash
-cd $WORK_DIR/guestbook-nodejs-config/
-kubectl apply -f . -n mongo
-```
+    ```bash
+    cd $WORK_DIR/guestbook-nodejs-config/
+    kubectl apply -f . -n mongo-statefulset
+    ```
 
-Ensure that the application pod is running:
+    Ensure that the application pod is running:
 
-```bash
-kubectl get pods -n mongo
-```
+    ```bash
+    kubectl get pods -n mongo-statefulset
+    ```
 
-You should see both the mongo pod and the guestbook pod running now:
+    You should see both the mongo pod and the guestbook pod running now:
 
-```bash
-NAME                             READY   STATUS    RESTARTS   AGE
-guestbook-v1-9465dcbb4-zdhqv     1/1     Running   0          19s
-mongo-mongodb-757d9777d7-j4759   1/1     Running   0          27m
-```
+    ```
+    $ kubectl get pods -n mongo-statefulset
+    NAME                           READY   STATUS    RESTARTS   AGE
+    guestbook-v1-9668f9585-dp9r8   1/1     Running   0          3m24s
+    mongo-mongodb-0                1/1     Running   0          79m
+    mongo-mongodb-1                1/1     Running   0          78m
+    mongo-mongodb-2                1/1     Running   0          76m
+    ```
 
 ### Test out the application
 
@@ -369,64 +326,58 @@ Now that we have deployed the application, let's test it out.
 
 1. Find the URL for the guestbook application by joining the worker node external IP and service node port. Run the following to get the IP and service node port of the application:
 
-```bash
-HOSTNAME=`kubectl get nodes -ojsonpath='{.items[0].metadata.labels.ibm-cloud\.kubernetes\.io\/external-ip}'`
-SERVICEPORT=`kubectl get svc guestbook -n mongo -o=jsonpath='{.spec.ports[0].nodePort}'`
-echo "http://$HOSTNAME:$SERVICEPORT"
-```
+    ```bash
+    HOSTNAME=`kubectl get nodes -ojsonpath='{.items[0].metadata.labels.ibm-cloud\.kubernetes\.io\/external-ip}'`
+    SERVICEPORT=`kubectl get svc guestbook -n mongo-statefulset -o=jsonpath='{.spec.ports[0].nodePort}'`
+    echo "http://$HOSTNAME:$SERVICEPORT"
+    ```
 
-1. In your browser, open up the address that was output as part of the previous command.
+1. In your browser, open up the address that was output as part of the previous command. Type in a few test entries in the text box and press enter to submit them.
 
-1. Type in a few test entries in the text box and press enter to submit them.
+    ![testEntries](./images/testEntries.png)
 
-  ![testEntries](./images/testEntries.png)
-
-  These entries are now saved in the Mongo database. Let's take down the application and see if the data will truly persist.
+    These entries are now saved in the Mongo database. Let's take down the application and see if the data will truly persist.
 
 1. Find the name of the pod that is running our application:
 
-```bash
-kubectl get pods -n mongo
-```
+    ```bash
+    kubectl get pods -n mongo-statefulset
+    ```
 
-Copy the name of the pod that starts with `guestbook`. For me, the pod is named `guestbook-v1-9465dcbb4-f6s9h`.
+    Copy the name of the pod that starts with `guestbook`. For me, the pod is named `guestbook-v1-9465dcbb4-f6s9h`.
 
-```bash
-NAME                             READY   STATUS    RESTARTS   AGE
-guestbook-v1-9465dcbb4-f6s9h     1/1     Running   0          4m7s
-mongo-mongodb-757d9777d7-q64lg   1/1     Running   0          5m47s
-```
+    ```bash
+    NAME                             READY   STATUS    RESTARTS   AGE
+    guestbook-v1-9465dcbb4-f6s9h     1/1     Running   0          4m7s
+    mongo-mongodb-757d9777d7-q64lg   1/1     Running   0          5m47s
+    ```
 
-1. Then, run the following command, replacing `<pod name>` with pod name that you just copied.
+1. Let's connect to the database to view the records.
 
-```bash
-kubectl delete pod -n mongo <pod name>
-```
+    ```bash
+        export MONGODB_ROOT_PASSWORD=$(kubectl get secret --namespace mongo-statefulset mongo-mongodb -o jsonpath="{.data.mongodb-root-password}" | base64 --decode)
+        export MONGODB_PASSWORD=$(kubectl get secret --namespace mongo-statefulset mongo-mongodb -o jsonpath="{.data.mongodb-password}" | base64 --decode)
+        kubectl run --namespace mongo-statefulset mongo-mongodb-client --rm --tty -i --restart='Never' --env="MONGODB_ROOT_PASSWORD=$MONGODB_ROOT_PASSWORD" --image docker.io/bitnami/mongodb:4.4.4-debian-10-r0 --command -- bash
+    ```
 
-You should then see a message saying that your pod has been deleted.
+    Then, run the following command:
+    ```bash
+        mongo admin --host "mongo-mongodb-0.mongo-mongodb-headless.mongo-statefulset.svc.cluster.local:27017,mongo-mongodb-1.mongo-mongodb-headless.mongo-statefulset.svc.cluster.local:27017,mongo-mongodb-2.mongo-mongodb-headless.mongo-statefulset.svc.cluster.local:27017" --authenticationDatabase admin -u root -p $MONGODB_ROOT_PASSWORD
+    ```
 
-```bash
-$ kubectl delete pod -n mongo guestbook-v1-9465dcbb4-f6s9h
-pod "guestbook-v1-9465dcbb4-f6s9h" deleted
-```
-
-1. Now, view your pods again:
-
-```bash
-kubectl get pods -n mongo
-```
-
-You should see the guestbook pod is back now with and the age has been reset. This means that it is a brand new pod that kubernetes has deployed automatically after our previous pod was deleted.
-
-```bash
-NAME                             READY   STATUS    RESTARTS   AGE
-guestbook-v1-9465dcbb4-8z8bt     1/1     Running   0          87s
-mongo-mongodb-757d9777d7-q64lg   1/1     Running   0          9m13s
-```
-
-1. Refresh your browser tab that had the guestbook application and you will see that your data has indeed persisted after our pod went down.
-
-![new pod](./images/newPod.png)
+    Query the data in the `guestbook` database:
+    ```
+    > use guestbook
+    switched to db guestbook
+    > show collections
+    entry
+    >
+    > db.entry.find()
+    { "_id" : ObjectId("603955c28f6077001501e239"), "message" : "Hello", "timestamp" : ISODate("2021-02-26T20:10:42Z") }
+    { "_id" : ObjectId("603955c58f6077001501e23a"), "message" : "Holla", "timestamp" : ISODate("2021-02-26T20:10:45Z") }
+    { "_id" : ObjectId("603955c98f6077001501e23b"), "message" : "Namaste", "timestamp" : ISODate("2021-02-26T20:10:49Z") }
+    >
+    ```
 
 ## Summary
 
@@ -440,13 +391,13 @@ This part of the lab desrcibes the steps to delete what was built in the lab.
 
 ```bash
 cd $WORK_DIR/guestbook-nodejs-config
-kubectl delete -f . -n mongo
+kubectl delete -f . -n mongo-statefulset
 ```
 
 ### Uninstalling Mongo
 
 ```bash
-helm uninstall mongo -n mongo
+helm uninstall mongo -n mongo-statefulset
 ```
 
 ### Remove namespace

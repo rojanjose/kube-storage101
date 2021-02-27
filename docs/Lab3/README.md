@@ -26,11 +26,13 @@ The basic architecture is as follows
 
 Before we get into the lab we first need to do some setup to ensure that the lab will flow smoothly.
 
-<!-- 1. Replace `<docker username>` with your DockerHub username and run the following command (be sure to replace the `< >` too!).
+<!-- 
+1. Replace `<docker username>` with your DockerHub username and run the following command (be sure to replace the `< >` too!).
 
 ```bash
 DOCKERUSER=<docker username>
-``` -->
+``` 
+-->
 
 1. In your terminal, navigate to where you would like to store the files used in this lab and run the following.
 
@@ -257,156 +259,142 @@ With MongoDB deployed now we need to deploy an application that will utilize it 
 For this lab we will be using the guestbook application which is a common sample kubernetes application. However, the version that we are using has been refactored as a loopback application.
 
 1. Clone the application repo and the configuration repo. In your terminal, run the following:
-
-```bash
-cd $WORK_DIR
-git clone https://github.com/IBM/guestbook-nodejs.git
-git clone https://github.com/IBM/guestbook-nodejs-config/ --branch mongo
-```
-
+  ```bash
+  cd $WORK_DIR
+  git clone https://github.com/IBM/guestbook-nodejs.git
+  git clone https://github.com/IBM/guestbook-nodejs-config/ --branch mongo
+  ```
 1. Then, navigate into the `guestbook-nodejs` directory.
-
-```bash
-cd $WORK_DIR/guestbook-nodejs/src
-```
-
+  ```bash
+  cd $WORK_DIR/guestbook-nodejs/src
+  ```
 1. Replace the code in the `server/datasources.json` file with the following:
-
-```json
-{
-  "in-memory": {
-    "name": "in-memory",
-    "localStorage": "",
-    "file": "",
-    "connector": "memory"
-  },
-  "mongo": {
-    "host": "${MONGO_HOST}",
-    "port": "${MONGO_PORT}",
-    "url": "",
-    "database": "${MONGO_DB}",
-    "password": "${MONGO_PASS}",
-    "name": "mongo",
-    "user": "${MONGO_USER}",
-    "useNewUrlParser": true,
-    "connector": "mongodb"
+  ```json
+  {
+    "in-memory": {
+      "name": "in-memory",
+      "localStorage": "",
+      "file": "",
+      "connector": "memory"
+    },
+    "mongo": {
+      "host": "${MONGO_HOST}",
+      "port": "${MONGO_PORT}",
+      "url": "",
+      "database": "${MONGO_DB}",
+      "password": "${MONGO_PASS}",
+      "name": "mongo",
+      "user": "${MONGO_USER}",
+      "useNewUrlParser": true,
+      "connector": "mongodb"
+    }
   }
-}
-```
-
-This file will contain the connection information to our MongoDB instance. These variables will be passed into the environment from ConfigMaps and Secrets that we will create.
+  ```
+  This file will contain the connection information to our MongoDB instance. These variables will be passed into the environment from ConfigMaps and Secrets that we will create.
 
 1. Open the `server/model-config.json` file and change the `entry.datasource` value to `mongo` as seen below:
-
-```json
-...
-"entry": {
-    "dataSource": "mongo",
-    "public": true
+  ```json
+  ...
+  "entry": {
+      "dataSource": "mongo",
+      "public": true
+    }
   }
-}
-```
-
-In this file we are telling the application which datasource we should use; in-memory or MongoDB. By default the application comes with an in-memory datastore for storing information but this data does not persist after the application crashes or if the pod goes down for any reason. We are changing `in-memory` to `mongo` so that the data will persist in our MongoDB instance external to the application so that the data will remain even after the application crashes.
+  ```
+  In this file we are telling the application which datasource we should use; in-memory or MongoDB. By default the application comes with an in-memory datastore for storing information but this data does not persist after the application crashes or if the pod goes down for any reason. We are changing `in-memory` to `mongo` so that the data will persist in our MongoDB instance external to the application so that the data will remain even after the application crashes.
 
 1. Now we need to build our application image and push it to DockerHub.
-
-```bash
-cd $WORK_DIR/guestbook-nodejs/src
-IMAGE_NAME=$DOCKERUSER/guestbook-nodejs:mongo
-docker build -t $IMAGE_NAME .
-docker login -u $DOCKERUSER
-docker push $IMAGE_NAME
-```
+  ```bash
+  cd $WORK_DIR/guestbook-nodejs/src
+  IMAGE_NAME=$DOCKERUSER/guestbook-nodejs:mongo
+  docker build -t $IMAGE_NAME .
+  docker login -u $DOCKERUSER
+  docker push $IMAGE_NAME
+  ```
 
 ### Deploying Guestbook
 
 Now that we have built our application, let's check out the manifest files needed to deploy it to Kubernetes.
 
 1. Navigate to the configuration repo that we cloned earlier.
-
-```bash
-cd $WORK_DIR/guestbook-nodejs-config
-```
-
-This repo contains 3 manifests that we will be deploying to our cluster today:
-
-- A deployment manifest
-- A service manifest
-- A configMap manifest
-
-These manifests will create their respective kubernetes objects on our cluster.
-
-The `deployment` will deploy our application image that we built earlier while the `service` will expose that application to external traffic. The `configMap` will contain connection information for our database such as database hostname and port.
+  ```bash
+  cd $WORK_DIR/guestbook-nodejs-config
+  ```
+  This repo contains 3 manifests that we will be deploying to our cluster today:
+    - A deployment manifest
+    - A service manifest
+    - A configMap manifest
+  
+  These manifests will create their respective kubernetes objects on our cluster.
+  
+  The `deployment` will deploy our application image that we built earlier while the `service` will expose that application to external traffic. The `configMap` will contain connection information for our database such as database hostname and port.
 
 1. Open the `guestbook-deployment.yaml` file and edit line 25 to point to the image that you built and pushed earlier. Do this by replacing `<DockerUsername>` with your docker username. (Don't forget to replace the `< >` too!)
 
-For example, my Docker username is `odrodrig` so line 25 in my `guestbook-deployment.yaml` file would look like this:
-
-```yaml
-...
-  image: odrodrig/guestbook-nodejs:mongo
-...
-```
-
-As part of the deployment, kubernetes will copy the database connection information from the configMap into the environment of the application. You can see where this is specified in the `env` section of the deployment manifest as seen below:
-
-```yaml
-...
-env:
-  - name: MONGO_HOST
-    valueFrom:
-      configMapKeyRef:
-        name: mongo-config
-        key: mongo_host
-  - name: MONGO_PORT
-    valueFrom:
-      configMapKeyRef:
-        name: mongo-config
-        key: mongo_port
-  - name: MONGO_USER
-    valueFrom:
-      secretKeyRef:
-        name: mongodb
-        key: username
-  - name: MONGO_PASS
-    valueFrom:
-      secretKeyRef:
-        name: mongodb
-        key: password
-  - name: MONGO_DB
-    valueFrom:
-      configMapKeyRef:
-        name: mongo-config
-        key: mongo_db_name
-```
-
-You might also notice that we are getting our database username (`MONGO_USER`) and password (`MONGO_PASS`) from a kubernetes secret. We haven't defined that secret yet so let's do it now.
-
-```bash
-kubectl create secret generic mongodb --from-literal=username=guestbook-admin --from-literal=password=$USER_PASS -n mongo
-```
+  For example, my Docker username is `odrodrig` so line 25 in my `guestbook-deployment.yaml` file would look like this:
+  ```yaml
+  ...
+    image: odrodrig/guestbook-nodejs:mongo
+  ...
+  ```
+  As part of the deployment, kubernetes will copy the database connection information from the configMap into the environment of the application. You can see where this is specified in the `env` section of the deployment manifest as seen below:
+  
+  ```yaml
+  ...
+  env:
+    - name: MONGO_HOST
+      valueFrom:
+        configMapKeyRef:
+          name: mongo-config
+          key: mongo_host
+    - name: MONGO_PORT
+      valueFrom:
+        configMapKeyRef:
+          name: mongo-config
+          key: mongo_port
+    - name: MONGO_USER
+      valueFrom:
+        secretKeyRef:
+          name: mongodb
+          key: username
+    - name: MONGO_PASS
+      valueFrom:
+        secretKeyRef:
+          name: mongodb
+          key: password
+    - name: MONGO_DB
+      valueFrom:
+        configMapKeyRef:
+          name: mongo-config
+          key: mongo_db_name
+  ```
+  
+  You might also notice that we are getting our database username (`MONGO_USER`) and password (`MONGO_PASS`) from a kubernetes secret. We haven't defined that secret yet so let's do it now.
+  
+  ```bash
+  kubectl create secret generic mongodb --from-literal=username=guestbook-admin --from-literal=password=$USER_PASS -n mongo
+  ```
 
 1. Now we are ready to deploy the application. Run the following commands:
 
-```bash
-cd $WORK_DIR/guestbook-nodejs-config/
-kubectl apply -f . -n mongo
-```
+  ```bash
+  cd $WORK_DIR/guestbook-nodejs-config/
+  kubectl apply -f . -n mongo
+  ```
 
-Ensure that the application pod is running:
+  Ensure that the application pod is running:
 
-```bash
-kubectl get pods -n mongo
-```
+  ```bash
+  kubectl get pods -n mongo
+  ```
 
-You should see both the mongo pod and the guestbook pod running now:
+  You should see both the mongo pod and the guestbook pod running now:
 
-```bash
-NAME                             READY   STATUS    RESTARTS   AGE
-guestbook-v1-9465dcbb4-zdhqv     1/1     Running   0          19s
-mongo-mongodb-757d9777d7-j4759   1/1     Running   0          27m
-```
+  ```bash
+  NAME                             READY   STATUS    RESTARTS   AGE
+  guestbook-v1-9465dcbb4-zdhqv     1/1     Running   0          19s
+  mongo-mongodb-757d9777d7-j4759   1/1     Running   0          27m
+  ```
 
 ### Test out the application
 
